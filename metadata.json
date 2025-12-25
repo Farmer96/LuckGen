@@ -1,0 +1,5 @@
+{
+  "name": "LuckyGen - AI 抽奖平台",
+  "description": "一个综合性的抽奖页面生成器。管理员可以配置奖池、概率并管理参与者权限。包含 AI 驱动的活动描述生成和移动端响应式的用户抽奖界面。",
+  "requestFramePermissions": []
+}

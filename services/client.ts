@@ -1,7 +1,7 @@
 import { LotteryConfig, User, DrawResult, Prize } from '../types';
 
 // ⚠️ 上线时请改为你的服务器地址，例如: https://your-app.zeabur.app
-const API_BASE = 'http://localhost:8080'; 
+const API_BASE = 'https://farmer96.zeabur.app';
 
 export const getLotteryData = async (): Promise<LotteryConfig | null> => {
   try {

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { checkEligibility, performDraw, getLotteryData, saveLotteryData } from '../services/mockDatabase';
+import React, { useState, useEffect, useRef } from 'react';
+import { checkEligibility, performDraw, getLotteryData, saveLotteryData } from '../services/client'; // 同样确保引用正确
 import { LotteryConfig, User, DrawResult, Prize } from '../types';
-import { Gift, Award, Clock, History, AlertCircle } from 'lucide-react';
+import { Gift, Award, Clock, History, AlertCircle, Sparkles, X, Trophy, ChevronDown } from 'lucide-react';
 
 interface LotteryViewProps {
   onBack: () => void;
@@ -20,52 +20,69 @@ const LotteryView: React.FC<LotteryViewProps> = ({ onBack }) => {
   const [error, setError] = useState('');
   const [isSpinning, setIsSpinning] = useState(false);
   const [winResult, setWinResult] = useState<{prize: Prize | null, record: DrawResult} | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false); // 控制底部抽屉
+  
+  // 滚动文字状态
+  const [rollingText, setRollingText] = useState("点击抽奖");
+  const rollingIntervalRef = useRef<any>(null);
 
   useEffect(() => {
-    // Poll for data updates (simulating real-time config changes like new users)
-    const loadData = () => {
-        const data = getLotteryData();
+    const loadData = async () => {
+        const data = await getLotteryData();
         setConfig(data);
-        // Also update current user if logged in to reflect new chance counts
         if (data && currentUser) {
             const updatedUser = data.allowedUsers.find(u => u.phone === currentUser.phone);
             if (updatedUser) setCurrentUser(updatedUser);
         }
     };
-    
     loadData();
     const interval = setInterval(loadData, 2000);
     return () => clearInterval(interval);
-  }, [currentUser?.phone]); // Reload if currentUser ID changes to sync
+  }, [currentUser?.phone]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  // 修复点：修正了这里的语法错误
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
     if (!config) return;
-
-    const { eligible, message, user } = checkEligibility(phone, name);
+    const { eligible, message, user } = await checkEligibility(phone, name);
     
+    // 简单的震动反馈
+    if (navigator.vibrate) navigator.vibrate(50);
+
     if (eligible && user) {
       setCurrentUser(user);
       setStep('LOTTERY');
     } else if (user) {
-        // User exists but has no chances or other issue, still let them in to see history
+        // 即使没有资格（次数用完），如果是合法用户也让进，进去再显示次数为0
         setCurrentUser(user);
         setStep('LOTTERY');
-        // If message was "no chances", we show that on the main screen
     } else {
       setError(message);
     }
   };
 
-  const handleDraw = () => {
-    if (!currentUser) return;
-    if (isSpinning) return;
+  const startRollingEffect = () => {
+    const texts = ["🤞 祈祷中...", "💎 大奖...", "🍀 运气...", "🎁 是什么..."];
+    let i = 0;
+    rollingIntervalRef.current = setInterval(() => {
+        setRollingText(texts[i % texts.length]);
+        i++;
+    }, 150);
+  };
+
+  const stopRollingEffect = () => {
+    if (rollingIntervalRef.current) clearInterval(rollingIntervalRef.current);
+    setRollingText("点击抽奖");
+  };
+
+  const handleDraw = async () => {
+    if (!currentUser || isSpinning) return;
     
-    // Check eligibility again strictly before draw
-    const { eligible, message } = checkEligibility(currentUser.phone, currentUser.name);
+    // 手机震动反馈
+    if (navigator.vibrate) navigator.vibrate(100);
+
+    const { eligible, message } = await checkEligibility(currentUser.phone, currentUser.name);
     if (!eligible) {
         alert(message);
         return;
@@ -73,226 +90,270 @@ const LotteryView: React.FC<LotteryViewProps> = ({ onBack }) => {
 
     setIsSpinning(true);
     setWinResult(null);
+    startRollingEffect();
 
-    // Simulate network/animation delay
-    setTimeout(() => {
-        const { result, prize, error: drawError } = performDraw(currentUser.phone);
+    setTimeout(async () => {
+        const { result, prize, error: drawError } = await performDraw(currentUser.phone);
+        stopRollingEffect();
+        setIsSpinning(false);
         
         if (drawError || !result) {
-            setIsSpinning(false);
             alert(drawError || "抽奖失败");
             return;
         }
 
-        // Animation finish
         setWinResult({ prize, record: result });
-        setIsSpinning(false);
+        // 中奖强烈震动
+        if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
         
-        // Refresh local user state immediately
-        const data = getLotteryData();
+        // 刷新用户状态
+        const data = await getLotteryData();
         if(data) {
              const u = data.allowedUsers.find(x => x.phone === currentUser.phone);
              if(u) setCurrentUser(u);
         }
         
-    }, 2000);
+    }, 2000); // 2秒对于手机用户来说等待感刚好
   };
 
-  if (!config) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">活动加载中...</div>;
+  if (!config) return <div className="h-screen flex items-center justify-center bg-gray-900 text-white">加载活动...</div>;
+
+  const remainingChances = currentUser ? (currentUser.totalChances - currentUser.usedChances) : 0;
 
   return (
-    <div className="min-h-screen lottery-bg flex flex-col items-center justify-start pb-10 text-white relative">
-      {/* Background decoration */}
+    // 使用 h-[100dvh] 确保在移动端浏览器（含地址栏）中也能完美全屏
+    <div className="h-[100dvh] w-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-red-900 via-red-950 to-black text-white relative overflow-hidden font-sans flex flex-col">
+      
+      {/* --- 动态背景 --- */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-0 w-full h-64 bg-white opacity-5 rounded-b-[50%] transform scale-x-150"></div>
-        {[...Array(20)].map((_, i) => (
-            <div key={i} className="absolute rounded-full bg-white opacity-10 animate-pulse" 
+        <div className="absolute top-[-10%] left-1/2 -translate-x-1/2 w-[150%] h-[50%] bg-red-600/20 blur-[80px] rounded-full"></div>
+        {/* 少量漂浮粒子，避免手机卡顿 */}
+        {[...Array(8)].map((_, i) => (
+            <div key={i} className="absolute rounded-full bg-yellow-400/20 animate-pulse" 
                 style={{
                     top: Math.random() * 100 + '%',
                     left: Math.random() * 100 + '%',
-                    width: Math.random() * 10 + 5 + 'px',
-                    height: Math.random() * 10 + 5 + 'px',
-                    animationDuration: Math.random() * 2 + 1 + 's'
+                    width: Math.random() * 4 + 2 + 'px',
+                    height: Math.random() * 4 + 2 + 'px',
+                    animationDuration: Math.random() * 3 + 2 + 's'
                 }}
             />
         ))}
       </div>
 
-      {/* Header */}
-      <div className="w-full max-w-md z-10 p-6 text-center">
-        <h1 className="text-3xl font-extrabold text-white drop-shadow-md tracking-tight mb-2">
-            {config.title || "幸运大抽奖"}
-        </h1>
-        <p className="text-white/80 text-sm mb-4 bg-black/20 p-2 rounded-lg inline-block backdrop-blur-sm">
+      {/* --- 顶部区域 (Logo & 标题) --- */}
+      <div className="relative z-10 px-6 pt-12 pb-4 text-center flex-shrink-0">
+         {/* 装饰性小标 */}
+         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/10 backdrop-blur-sm text-[10px] text-yellow-200 mb-4 shadow-lg">
+            <Sparkles className="w-3 h-3" />
+            <span>{config.participantType === 'PUBLIC' ? '公开活动' : '内部福利'}</span>
+         </div>
+         
+         <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-br from-yellow-200 via-yellow-400 to-yellow-600 drop-shadow-md leading-tight">
+            {config.title || "幸运大转盘"}
+         </h1>
+         <p className="text-white/60 text-xs mt-2 line-clamp-2 px-4">
             {config.description}
-        </p>
-        <div className="flex justify-center items-center gap-2 text-xs font-mono bg-white/10 py-1 px-3 rounded-full w-fit mx-auto">
-            <Clock className="w-3 h-3" />
-            结束时间: {new Date(config.endTime).toLocaleDateString()}
-        </div>
+         </p>
       </div>
 
-      {/* Main Content */}
-      <div className="w-full max-w-md px-4 z-10 flex-1 flex flex-col">
+      {/* --- 中间主体内容 (自动撑开，居中) --- */}
+      <div className="flex-1 flex flex-col items-center justify-center relative z-10 w-full px-6">
         
-        {step === 'LOGIN' && (
-          <div className="bg-white rounded-2xl p-8 shadow-2xl text-gray-800 mt-4">
-            <h2 className="text-xl font-bold text-center mb-6 text-gray-900">参与者登录</h2>
+        {step === 'LOGIN' ? (
+          /* 登录卡片 */
+          <div className="w-full max-w-sm bg-white/10 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl animate-[slideUp_0.4s_ease-out]">
+            <h2 className="text-lg font-bold text-center mb-6 text-white">验证手机号参与</h2>
             <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">手机号</label>
-                <input 
-                  type="tel" 
-                  required
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full rounded-lg border-gray-300 border p-3 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all"
-                  placeholder="请输入手机号"
-                />
-              </div>
-              
+              <input 
+                type="tel" 
+                required
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="w-full bg-black/20 border border-white/10 rounded-2xl px-4 py-4 text-white placeholder-white/40 focus:ring-2 focus:ring-yellow-500/50 outline-none transition-all text-center text-lg tracking-widest"
+                placeholder="请输入手机号"
+              />
               {config.participantType === 'PUBLIC' && (
-                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">您的姓名</label>
-                    <input 
-                      type="text" 
-                      required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="w-full rounded-lg border-gray-300 border p-3 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all"
-                      placeholder="请输入姓名"
-                    />
-                 </div>
+                 <input 
+                   type="text" 
+                   required
+                   value={name}
+                   onChange={(e) => setName(e.target.value)}
+                   className="w-full bg-black/20 border border-white/10 rounded-2xl px-4 py-4 text-white placeholder-white/40 focus:ring-2 focus:ring-yellow-500/50 outline-none transition-all text-center text-base"
+                   placeholder="您的姓名"
+                 />
               )}
-
-              {error && (
-                <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                    {error}
-                </div>
-              )}
-
-              <button type="submit" className="w-full py-3.5 bg-gradient-to-r from-red-600 to-pink-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transform transition-transform active:scale-95">
-                验证并进入
+              {error && <div className="text-red-300 text-xs text-center bg-red-900/30 py-2 rounded-lg">{error}</div>}
+              
+              <button type="submit" className="w-full py-4 bg-gradient-to-r from-yellow-500 to-yellow-600 active:from-yellow-600 active:to-yellow-700 text-red-950 font-bold text-lg rounded-2xl shadow-lg shadow-yellow-900/20 active:scale-[0.98] transition-all">
+                立即验证
               </button>
             </form>
           </div>
-        )}
-
-        {step === 'LOTTERY' && currentUser && (
-          <div className="flex flex-col items-center">
+        ) : (
+          /* 抽奖圆盘区域 */
+          <div className="flex flex-col items-center w-full">
             
-            {/* Stats Card */}
-            <div className="w-full bg-white/10 backdrop-blur-md rounded-xl p-4 flex justify-between items-center mb-8 border border-white/20">
-                <div className="text-left">
-                    <p className="text-xs text-white/70">欢迎您，</p>
-                    <p className="font-bold">{currentUser.name || currentUser.phone}</p>
-                </div>
-                <div className="text-right">
-                    <p className="text-xs text-white/70">剩余次数</p>
-                    <p className="font-bold text-xl text-yellow-300">{currentUser.totalChances - currentUser.usedChances}</p>
-                </div>
+            {/* 用户状态条 */}
+            <div className="flex items-center gap-2 bg-black/30 border border-white/5 px-4 py-1.5 rounded-full mb-8 backdrop-blur-sm">
+                <span className="text-yellow-100 text-sm font-medium">{currentUser?.name || currentUser?.phone}</span>
+                <span className="w-px h-3 bg-white/20"></span>
+                <span className="text-xs text-white/60">机会: <span className="text-white font-bold">{remainingChances}</span></span>
             </div>
 
-            {/* The "Wheel" / Box */}
-            <div className="relative mb-8 group">
-                {/* Glow behind */}
-                <div className={`absolute -inset-4 bg-yellow-400 rounded-full blur-xl opacity-50 transition-all duration-300 ${isSpinning ? 'scale-110 opacity-80' : 'scale-100'}`}></div>
+            {/* 巨大化按钮 - 视觉重心 */}
+            <div className="relative group touch-manipulation">
+                {/* 呼吸光环 */}
+                <div className={`absolute inset-0 bg-red-500 rounded-full blur-3xl opacity-20 transition-all duration-500 ${isSpinning ? 'scale-150 opacity-40' : 'animate-pulse'}`}></div>
                 
                 <button 
                     onClick={handleDraw}
-                    disabled={isSpinning || (currentUser.totalChances - currentUser.usedChances <= 0)}
-                    className={`relative w-48 h-48 bg-gradient-to-br from-yellow-300 via-yellow-500 to-orange-500 rounded-full shadow-[0_10px_20px_rgba(0,0,0,0.3)] flex flex-col items-center justify-center border-4 border-yellow-200 transition-all duration-300 
-                    ${isSpinning ? 'animate-[spin_0.5s_linear_infinite]' : 'hover:scale-105 active:scale-95'}
-                    ${(currentUser.totalChances - currentUser.usedChances <= 0) ? 'opacity-50 grayscale cursor-not-allowed' : ''}
+                    disabled={isSpinning || remainingChances <= 0}
+                    className={`
+                        relative w-64 h-64 rounded-full flex flex-col items-center justify-center
+                        transition-all duration-200 touch-none select-none
+                        ${remainingChances <= 0 
+                            ? 'bg-gray-800 grayscale cursor-not-allowed' 
+                            : 'bg-gradient-to-b from-red-600 to-red-800 active:scale-95 shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_2px_10px_rgba(255,255,255,0.2)] border-4 border-red-900'
+                        }
                     `}
+                    style={{ WebkitTapHighlightColor: 'transparent' }}
                 >
-                    <div className={`${isSpinning ? 'opacity-50' : 'opacity-100'}`}>
-                        <Gift className="w-12 h-12 text-red-700 mb-1" />
-                        <span className="text-red-900 font-black text-xl uppercase tracking-wider">
-                            {isSpinning ? '...' : '抽奖'}
-                        </span>
+                    {/* 内部装饰圈 */}
+                    <div className={`absolute inset-3 border-2 border-dashed border-yellow-500/30 rounded-full ${isSpinning ? 'animate-[spin_3s_linear_infinite]' : ''}`}></div>
+                    
+                    <div className="z-10 flex flex-col items-center">
+                        {isSpinning ? (
+                            <>
+                                <Clock className="w-12 h-12 text-yellow-300 mb-2 animate-bounce" />
+                                <span className="text-2xl font-bold text-white tracking-widest">{rollingText}</span>
+                            </>
+                        ) : (
+                            <>
+                                <Gift className={`w-16 h-16 text-yellow-300 mb-3 filter drop-shadow-lg ${remainingChances > 0 ? 'animate-[bounce_2s_infinite]' : ''}`} />
+                                <span className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-yellow-100 tracking-wider">
+                                    {remainingChances > 0 ? "GO" : "结束"}
+                                </span>
+                                <span className="text-xs text-red-200/60 mt-2 font-medium">点击开始抽奖</span>
+                            </>
+                        )}
                     </div>
                 </button>
             </div>
-
-             {/* Result Modal Overlay */}
-             {winResult && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.3s]">
-                    <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl transform animate-[bounceIn_0.5s]">
-                        <div className="mx-auto w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mb-4">
-                            {winResult.prize ? <Award className="w-10 h-10 text-yellow-600" /> : <Gift className="w-10 h-10 text-gray-400" />}
-                        </div>
-                        
-                        <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                            {winResult.prize ? "恭喜中奖！" : "很遗憾"}
-                        </h3>
-                        <p className="text-gray-600 mb-6 text-lg">
-                            {winResult.prize ? `您获得了：${winResult.prize.name}` : "本次未中奖，感谢参与。"}
-                        </p>
-                        
-                        <div className="space-y-3">
-                             {winResult.prize && (
-                                <div className="bg-yellow-50 border border-yellow-200 p-3 rounded text-sm text-yellow-800">
-                                    {winResult.prize.description || "请联系管理员领奖。"}
-                                </div>
-                             )}
-                             <button 
-                                onClick={() => setWinResult(null)}
-                                className="w-full py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700"
-                            >
-                                {currentUser.totalChances - currentUser.usedChances > 0 ? "再试一次" : "关闭"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-
-            <button 
-                onClick={() => setShowHistory(!showHistory)}
-                className="flex items-center gap-2 text-white/80 hover:text-white mb-6 text-sm"
-            >
-                <History className="w-4 h-4" />
-                {showHistory ? "收起记录" : "查看我的记录"}
-            </button>
-
-            {showHistory && (
-                <div className="w-full bg-white rounded-xl shadow-lg overflow-hidden animate-[slideUp_0.3s]">
-                    <div className="bg-gray-100 px-4 py-2 border-b border-gray-200">
-                        <h3 className="text-gray-700 font-bold text-sm">中奖记录</h3>
-                    </div>
-                    <div className="max-h-48 overflow-y-auto">
-                        {config.drawRecords.filter(r => r.userPhone === currentUser.phone).length === 0 ? (
-                            <p className="text-center py-4 text-gray-400 text-sm">暂无记录。</p>
-                        ) : (
-                            config.drawRecords
-                                .filter(r => r.userPhone === currentUser.phone)
-                                .map(r => (
-                                <div key={r.id} className="border-b border-gray-100 px-4 py-3 flex justify-between items-center last:border-0">
-                                    <div className="flex flex-col">
-                                        <span className={`text-sm font-medium ${r.prizeId ? 'text-green-600' : 'text-gray-500'}`}>
-                                            {r.prizeName}
-                                        </span>
-                                        <span className="text-xs text-gray-400">
-                                            {new Date(r.timestamp).toLocaleTimeString()}
-                                        </span>
-                                    </div>
-                                    {r.prizeId && <Award className="w-4 h-4 text-yellow-500" />}
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            )}
+            
+            {/* 底部提示 */}
+            <p className="mt-10 text-white/30 text-xs font-light">
+                {remainingChances > 0 ? "祝您好运连连" : "感谢您的参与"}
+            </p>
           </div>
         )}
       </div>
-      
-      {/* Hidden back button for demo purposes */}
-      <button onClick={onBack} className="absolute bottom-2 right-2 text-white/20 hover:text-white/50 text-xs">
-        管理后台
-      </button>
+
+      {/* --- 底部固定栏 (仅在抽奖模式显示) --- */}
+      {step === 'LOTTERY' && (
+        <div className="relative z-20 px-6 pb-8 pt-4 bg-gradient-to-t from-black/80 to-transparent flex-shrink-0 flex justify-center">
+            <button 
+                onClick={() => setShowHistory(true)}
+                className="flex items-center gap-2 px-5 py-2.5 bg-white/10 backdrop-blur-md rounded-full text-sm font-medium text-white hover:bg-white/20 transition-all border border-white/5"
+            >
+                <Trophy className="w-4 h-4 text-yellow-400" />
+                查看我的奖品
+            </button>
+        </div>
+      )}
+
+      {/* --- 底部抽屉 (History Drawer) --- */}
+      {showHistory && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center">
+            {/* 遮罩层 */}
+            <div 
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.3s]" 
+                onClick={() => setShowHistory(false)}
+            ></div>
+            
+            {/* 抽屉内容 */}
+            <div className="relative w-full max-w-lg bg-[#1a1a1a] rounded-t-[2rem] p-6 pb-10 shadow-2xl animate-[slideUp_0.3s_ease-out] border-t border-white/10 max-h-[70vh] flex flex-col">
+                <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto mb-6"></div>
+                
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                        <History className="w-5 h-5 text-indigo-400" /> 
+                        中奖记录
+                    </h3>
+                    <button onClick={() => setShowHistory(false)} className="p-2 bg-white/5 rounded-full text-gray-400">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-3 min-h-[200px]">
+                    {config.drawRecords.filter(r => r.userPhone === currentUser?.phone).length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-white/30 space-y-3">
+                            <Gift className="w-12 h-12 opacity-20" />
+                            <p className="text-sm">暂无中奖记录</p>
+                        </div>
+                    ) : (
+                        config.drawRecords
+                            .filter(r => r.userPhone === currentUser?.phone)
+                            .slice().reverse() // 最新的在最上面
+                            .map(r => (
+                            <div key={r.id} className="bg-white/5 p-4 rounded-xl flex justify-between items-center border border-white/5">
+                                <div>
+                                    <div className={`font-bold text-lg ${r.prizeId ? 'text-yellow-400' : 'text-gray-500'}`}>
+                                        {r.prizeName}
+                                    </div>
+                                    <div className="text-xs text-white/40 mt-1">
+                                        {new Date(r.timestamp).toLocaleTimeString()}
+                                    </div>
+                                </div>
+                                {r.prizeId && <Award className="w-6 h-6 text-yellow-500" />}
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- 中奖结果弹窗 (Modal) --- */}
+      {winResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-md animate-[fadeIn_0.2s]">
+            <div className="relative w-full max-w-sm bg-gradient-to-b from-red-600 to-red-900 p-1 rounded-[2.5rem] shadow-2xl animate-[bounceIn_0.6s]">
+                
+                {/* 顶部爆炸光效 */}
+                <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[120%] h-full bg-yellow-500/30 blur-3xl rounded-full pointer-events-none"></div>
+
+                <div className="bg-[#1a0505] rounded-[2.3rem] p-8 text-center relative overflow-hidden">
+                    {/* 背景纹理 */}
+                    <div className="absolute top-0 left-0 w-full h-full opacity-30 bg-[radial-gradient(#eab308_1px,transparent_1px)] [background-size:16px_16px]"></div>
+
+                    <div className="relative z-10 flex flex-col items-center">
+                        <div className="w-28 h-28 bg-gradient-to-br from-yellow-300 to-yellow-600 rounded-full flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(234,179,8,0.5)] border-4 border-yellow-200">
+                            {winResult.prize ? <Award className="w-14 h-14 text-red-900" /> : <Gift className="w-14 h-14 text-red-900/50" />}
+                        </div>
+                        
+                        <h3 className="text-2xl font-black text-white mb-2 tracking-wide">
+                            {winResult.prize ? "🎉 恭喜中奖！" : "😅 遗憾未中"}
+                        </h3>
+                        <p className="text-yellow-100/80 mb-8 text-sm px-4 leading-relaxed">
+                            {winResult.prize ? (
+                                <>您获得了 <br/><span className="text-3xl font-black text-yellow-400 mt-2 block">{winResult.prize.name}</span></>
+                            ) : "差一点点运气，下次一定行！"}
+                        </p>
+
+                        <button 
+                            onClick={() => setWinResult(null)}
+                            className="w-full py-4 bg-yellow-500 hover:bg-yellow-400 text-red-950 font-black text-lg rounded-2xl shadow-lg transition-transform active:scale-95"
+                        >
+                            {remainingChances > 0 ? "再抽一次" : "收下祝福"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* 隐藏的后台入口 (长按右下角) */}
+      <button onClick={onBack} className="absolute bottom-0 right-0 w-12 h-12 opacity-0 z-0"></button>
     </div>
   );
 };

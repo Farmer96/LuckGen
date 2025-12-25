@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { LotteryConfig, Prize, ParticipantType, User } from '../types';
-// 注意：确保这里引用的 services 文件里的 getLotteryData 是支持 async 的版本
-// 如果你还在用 mockDatabase，把 await 去掉；如果你用了 client.ts，必须保留 async/await
+// 确保这里引用的是 client (连接真实后端)
 import { saveLotteryData, getLotteryData, addOrUpdateUser } from '../services/client'; 
 import { generateEventDetails } from '../services/geminiService';
 import { 
@@ -33,19 +32,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
   const [newUser, setNewUser] = useState<User>({ phone: '', name: '', totalChances: 1, usedChances: 0 });
   const [isGenerated, setIsGenerated] = useState(false);
   
-  // QR Code Modal State
+  // --- 二维码弹窗状态 ---
   const [showQrModal, setShowQrModal] = useState(false);
-  const [qrHost, setQrHost] = useState(window.location.host); 
+  const [qrHost, setQrHost] = useState(''); // 域名状态
   const [copied, setCopied] = useState(false);
 
-  // --- 实时同步逻辑 (修复了 async/await 报错) ---
+  // 初始化时，自动获取当前浏览器域名
   useEffect(() => {
-    // 修复点：这里必须加上 async
+    if (typeof window !== 'undefined') {
+      setQrHost(window.location.host);
+    }
+  }, []);
+
+  // --- 实时同步逻辑 ---
+  useEffect(() => {
     const loadData = async () => {
       const existing = await getLotteryData();
       if (existing) {
         setConfig(prev => {
-            // 如果本地是初始空状态，则完全加载远程数据
             if (prev.id.startsWith('lottery-') && !prev.title) return existing;
             
             // 智能合并：保留本地正在编辑的内容，但同步库存和记录
@@ -157,10 +161,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
     reader.readAsText(file);
   };
 
-  // --- 二维码相关 ---
+  // --- 二维码核心逻辑 ---
   const getLotteryUrl = () => {
     const protocol = window.location.protocol;
-    return `${protocol}//${qrHost}${window.location.pathname}?mode=lottery`;
+    // 使用输入框里的 host，如果为空则回退到 window.location.host
+    const host = qrHost || window.location.host;
+    return `${protocol}//${host}${window.location.pathname}?mode=lottery`;
   };
 
   const copyToClipboard = () => {
@@ -191,7 +197,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
             </div>
             <div>
                 <h1 className="text-lg font-bold text-gray-900 leading-tight">LuckGen 控制台</h1>
-                <p className="text-[10px] text-gray-400 font-medium">活动管理系统 v1.2</p>
+                <p className="text-[10px] text-gray-400 font-medium">活动管理系统 v1.3</p>
             </div>
           </div>
           
@@ -458,7 +464,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
         </div>
       </div>
 
-      {/* QR Code Modal */}
+      {/* 🔥🔥🔥 优化后的 QR Code Modal 🔥🔥🔥 */}
       {showQrModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-[fadeIn_0.2s]">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl relative">
@@ -466,9 +472,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
             
             <div className="text-center mb-6">
               <h3 className="text-xl font-bold text-gray-900">活动二维码</h3>
-              <p className="text-xs text-gray-500 mt-1">手机扫码直接参与抽奖</p>
+              <p className="text-xs text-gray-500 mt-1">扫码直接进入抽奖页面</p>
             </div>
 
+            {/* 二维码显示区 */}
             <div className="bg-white p-2 rounded-xl border border-gray-100 shadow-inner flex justify-center mb-6">
               <img 
                 src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(getLotteryUrl())}`} 
@@ -477,25 +484,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLaunch }) => {
               />
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
+               {/* 链接/域名设置 */}
                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">域名/IP (局域网必填)</label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-bold text-gray-500 uppercase">访问地址 (Domain)</label>
+                    <span className="text-[10px] text-gray-400">当前: {qrHost || '自动检测'}</span>
+                  </div>
                   <input 
                     type="text" 
                     value={qrHost} 
                     onChange={(e) => setQrHost(e.target.value)} 
-                    className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="例如 192.168.1.5:5173"
+                    className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                    placeholder="例如 192.168.1.5:3000 或 my-app.vercel.app"
                   />
-                  <p className="text-[10px] text-orange-500 mt-1">* 如果是手机扫码，请将 localhost 改为电脑的局域网 IP</p>
+                  <p className="text-[10px] text-orange-500 mt-1 bg-orange-50 p-2 rounded border border-orange-100">
+                    * 如果手机扫码无法打开，请确保手机和电脑在同一局域网，并将上方地址改为电脑的 IP 地址 (如 192.168.X.X:3000)。
+                  </p>
                </div>
                
+               {/* 复制按钮 */}
                <button 
                 onClick={copyToClipboard}
-                className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                className={`w-full py-3 font-bold rounded-xl flex items-center justify-center gap-2 transition-all ${
+                    copied 
+                    ? 'bg-green-100 text-green-700 border border-green-200' 
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg hover:shadow-indigo-200'
+                }`}
                >
-                 {copied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                 {copied ? "已复制链接" : "复制活动链接"}
+                 {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                 {copied ? "链接已复制！" : "复制活动链接"}
                </button>
             </div>
           </div>
